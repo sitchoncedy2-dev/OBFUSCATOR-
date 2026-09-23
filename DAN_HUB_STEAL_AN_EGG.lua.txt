@@ -1,0 +1,767 @@
+--[[
+	DAN HUB | Steal An Egg
+	Made by SGA / SUN GOD NIKA
+	UI: WindUI
+	PlaceId: 107778070777162
+]]
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VU = game:GetService("VirtualUser")
+local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LP = Players.LocalPlayer
+
+if getgenv().DAN_HUB_SAE_LOADED then
+	warn("[DAN HUB SAE] already loaded")
+	return
+end
+getgenv().DAN_HUB_SAE_LOADED = true
+
+local dead = false
+local conns = {}
+local function track(c)
+	conns[#conns + 1] = c
+	return c
+end
+
+local function findHRP()
+	local c = LP.Character
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function findHum()
+	local c = LP.Character
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local EggState, PlotState, AreasData, RarityData, AssetsData, EggToolDisplay, AreaEggSlotIdentity, SaveModule
+pcall(function() EggState = require(RS.Client.EggState) end)
+pcall(function() PlotState = require(RS.Client.PlotState) end)
+pcall(function() AreasData = require(RS.Data.Areas) end)
+pcall(function() RarityData = require(RS.Data.Rarity) end)
+pcall(function() AssetsData = require(RS.Data.Assets) end)
+pcall(function() SaveModule = require(RS.Shared.Save) end)
+pcall(function() EggToolDisplay = require(RS.Shared.Eggs.EggToolDisplay) end)
+pcall(function()
+	AreaEggSlotIdentity = RS.Shared and RS.Shared.Util and require(RS.Shared.Util.AreaEggSlotIdentity)
+end)
+
+local function GetNetRemote(name)
+	local net = RS:FindFirstChild("Packages") and RS.Packages:FindFirstChild("Networking")
+	return net and net:FindFirstChild(name)
+end
+
+local function GetLocalPlotCenter()
+	local plotObj = PlotState and PlotState.ResolvePlot and PlotState.ResolvePlot()
+	local pt = plotObj and plotObj.CenterPoint
+	if pt then
+		local p = typeof(pt) == "Vector3" and pt or (typeof(pt) == "Instance" and pt:IsA("BasePart") and pt.Position)
+		if p then
+			return Vector3.new(p.X, math.max(p.Y, 70.4), p.Z)
+		end
+	end
+	return Vector3.new(464.7, 70.4, -364.0)
+end
+
+local autoStealEnabled = false
+local rareEggHunter = true
+local selectedStealRarities = {}
+local selectedStealAreas = {}
+local stealDelay = 1.0
+local glideSpeed = 500
+local stealMovementMethod = "Tween Glide"
+local avoidTrapsEnabled = true
+local autoHatchEnabled = false
+local autoPlantEnabled = false
+local hatchCheckDelay = 2.0
+local autoUpgradeBase = false
+local autoUpgradeTreadmill = false
+local autoBuyTrails = false
+local autoEquipBestPets = false
+local autoClaimRewards = false
+local autoSellPets = false
+local autoClaimMonsterChests = false
+local autoFeedMonster = false
+local batAuraEnabled = false
+local batAuraDelay = 0.2
+local antiRagdollEnabled = true
+local walkSpeedEnabled = false
+local walkSpeedVal = 24
+local jumpEnabled = false
+local jumpVal = 60
+local infiniteJump = false
+local antiAfk = true
+local ignoredEggs = {}
+local MAIN_ROAD_Z = -364.5
+local SAFE_BOUNDARY_X = 580
+local SAFE_ZONE_SPEED = 245
+
+local RARITY_SCORE_MAP = {
+	Titan = 1100, Divine = 1000, Superior = 1000, Eternal = 900, Limited = 900,
+	Secret = 800, Exotic = 800, Cosmic = 700, Exclusive = 700, Mythic = 600,
+	Rainbow = 600, Legendary = 500, Epic = 400, Rare = 300, Uncommon = 200, Common = 100,
+}
+
+local AREA_COORDINATES = {
+	["Base / Plot"] = Vector3.new(491.7, 70.4, -364.4),
+	["Forest"] = Vector3.new(596.0, 68.0, -328.0),
+	["Lake"] = Vector3.new(744.0, 68.5, -408.0),
+	["Desert"] = Vector3.new(948.0, 69.5, -323.0),
+	["Jungle"] = Vector3.new(1188.0, 68.5, -408.0),
+	["Snow"] = Vector3.new(1492.0, 69.0, -315.0),
+	["Volcano"] = Vector3.new(1882.0, 68.0, -398.0),
+	["Abyss Ocean"] = Vector3.new(2280.0, 68.0, -326.0),
+	["Prehistoric"] = Vector3.new(2812.0, 69.0, -398.0),
+	["Cosmic"] = Vector3.new(3390.0, 68.0, -324.0),
+	["Cherry Blossom"] = Vector3.new(4028.0, 68.5, -396.0),
+	["Titan Temple"] = Vector3.new(4796.0, 69.5, -328.0),
+	["Monster Event"] = Vector3.new(539.5, 68.0, -411.3),
+	["Dragon Event"] = Vector3.new(539.5, 68.0, -318.0),
+}
+
+local AREA_NAMES = {
+	"Forest", "Lake", "Desert", "Jungle", "Snow", "Volcano",
+	"Abyss Ocean", "Prehistoric", "Cosmic", "Cherry Blossom", "Titan Temple",
+	"Monster Event", "Dragon Event",
+}
+local RARITY_NAMES = {
+	"Titan", "Divine", "Superior", "Eternal", "Limited", "Secret", "Exotic", "Cosmic",
+	"Exclusive", "Mythic", "Rainbow", "Legendary", "Epic", "Rare", "Uncommon", "Common",
+}
+
+local function NeutralizeTraps()
+	local debris = Workspace:FindFirstChild("__DEBRIS")
+	if not debris then return end
+	for _, d in ipairs(debris:GetChildren()) do
+		if d.Name == "PlayerTrap" and d:GetAttribute("Owner") ~= LP.Name then
+			if d:IsA("BasePart") then
+				d.CanTouch = false
+				d.CanQuery = false
+			end
+			for _, c in ipairs(d:GetChildren()) do
+				if c:IsA("BasePart") then
+					c.CanTouch = false
+					c.CanQuery = false
+					if c.Name == "Hitbox" then
+						c.CFrame = CFrame.new(0, -999, 0)
+					end
+				end
+			end
+		end
+	end
+end
+
+local function MoveToPoint(target, speed)
+	local hrp = findHRP()
+	if not hrp or not target then return false end
+	speed = math.clamp(tonumber(speed) or 500, 50, 750)
+	local t0 = os.clock()
+	local totalDist = (target - hrp.Position).Magnitude
+	while not dead do
+		RunService.Heartbeat:Wait()
+		local remain = (target - hrp.Position).Magnitude
+		if remain < 1.5 then break end
+		local dir = (target - hrp.Position).Unit
+		local step = math.min(speed * 0.03, remain)
+		local nextPos = hrp.Position + dir * step
+		hrp.CFrame = CFrame.lookAt(nextPos, nextPos + dir)
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		if os.clock() - t0 > (totalDist / 40 + 8) then break end
+	end
+	hrp.CFrame = CFrame.new(target.X, math.max(target.Y, 70), target.Z)
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	return true
+end
+
+local function TravelRoadPath(targetPos, speed)
+	local hrp = findHRP()
+	if not hrp or not targetPos then return false end
+	if avoidTrapsEnabled then pcall(NeutralizeTraps) end
+	local startPos = hrp.Position
+	local safeY = math.max(startPos.Y, targetPos.Y, 70.4)
+	if targetPos.X < 560 and startPos.X > SAFE_BOUNDARY_X then
+		MoveToPoint(Vector3.new(startPos.X, safeY, MAIN_ROAD_Z), speed)
+		MoveToPoint(Vector3.new(SAFE_BOUNDARY_X, safeY, MAIN_ROAD_Z), speed)
+		MoveToPoint(Vector3.new(targetPos.X, safeY, MAIN_ROAD_Z), SAFE_ZONE_SPEED)
+		MoveToPoint(targetPos + Vector3.new(0, 1.2, 0), SAFE_ZONE_SPEED)
+	else
+		MoveToPoint(Vector3.new(startPos.X, safeY, MAIN_ROAD_Z), speed)
+		MoveToPoint(Vector3.new(targetPos.X, safeY, MAIN_ROAD_Z), speed)
+		MoveToPoint(targetPos + Vector3.new(0, 1.2, 0), speed)
+	end
+	return true
+end
+
+local function TravelFlyDirect(targetPos, speed)
+	local hrp = findHRP()
+	if not hrp or not targetPos then return false end
+	if avoidTrapsEnabled then pcall(NeutralizeTraps) end
+	local start = hrp.Position
+	local alt = math.max(start.Y, targetPos.Y, 70.4) + 28
+	MoveToPoint(Vector3.new(start.X, alt, start.Z), speed)
+	MoveToPoint(Vector3.new(targetPos.X, alt, targetPos.Z), speed)
+	MoveToPoint(Vector3.new(targetPos.X, math.max(targetPos.Y, 70) + 1.2, targetPos.Z), speed)
+	return true
+end
+
+local function TravelToDestination(targetPos, speed)
+	if stealMovementMethod == "Fly Glide" then
+		return TravelFlyDirect(targetPos, speed)
+	elseif stealMovementMethod == "Teleport" then
+		local hrp = findHRP()
+		if hrp then
+			hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.5, 0))
+			hrp.AssemblyLinearVelocity = Vector3.zero
+		end
+		return true
+	end
+	return TravelRoadPath(targetPos, speed)
+end
+
+local function GetEggRarityInfo(egg)
+	if not egg then return "Common", 100 end
+	if egg.Rarity then
+		local r = egg.Rarity
+		local name = type(r) == "table" and (r.DisplayName or r._id or r.Name) or tostring(r)
+		return name, RARITY_SCORE_MAP[name] or 100
+	end
+	local cat = egg.AssetCategory or egg.Category or egg.Name
+	if cat and AssetsData then
+		local aInfo = (AssetsData.Directory or AssetsData)[cat]
+		if aInfo and aInfo.Rarity then
+			local r = aInfo.Rarity
+			local name = type(r) == "table" and (r.DisplayName or r._id or r.Name) or tostring(r)
+			return name, RARITY_SCORE_MAP[name] or 100
+		end
+	end
+	return "Common", 100
+end
+
+local function filterHas(filter)
+	if type(filter) ~= "table" then return false end
+	for _ in pairs(filter) do return true end
+	return false
+end
+
+local function isRarityAllowed(name, filter)
+	if not filterHas(filter) then return true end
+	local rLower = string.lower(tostring(name))
+	for k, v in pairs(filter) do
+		if type(v) == "string" and string.lower(v) == rLower then return true end
+		if type(k) == "string" and string.lower(k) == rLower and v then return true end
+	end
+	return false
+end
+
+local function isAreaAllowed(areaId, filter)
+	if not filterHas(filter) then return true end
+	local aLower = string.lower(tostring(areaId))
+	for k, v in pairs(filter) do
+		if type(v) == "string" and string.lower(v) == aLower then return true end
+		if type(k) == "string" and string.lower(k) == aLower and v then return true end
+	end
+	return false
+end
+
+local function GetMatchingFieldEggs()
+	if not EggState or not EggState.ReadFieldEggs then return {} end
+	local ok, snapshot = pcall(EggState.ReadFieldEggs)
+	if not ok or not snapshot or not snapshot.Records then return {} end
+	local matched = {}
+	for _, record in ipairs(snapshot.Records) do
+		if record.State == "Slot" and record.BoundsCFrame then
+			local isIgnored = ignoredEggs[record.Uid] and (os.clock() - ignoredEggs[record.Uid] < 2.5)
+			if not isIgnored then
+				local rarityName, baseScore = GetEggRarityInfo(record)
+				if isAreaAllowed(record.AreaId, selectedStealAreas) and isRarityAllowed(rarityName, selectedStealRarities) then
+					local mutBonus = 0
+					for _, m in ipairs(record.Mutations or {}) do
+						if m == "Rainbow" then mutBonus = mutBonus + 35 end
+						if m == "Gold" or m == "Golden" then mutBonus = mutBonus + 20 end
+					end
+					if record.HasParasite then mutBonus = mutBonus + 800 end
+					matched[#matched + 1] = { record = record, rarity = rarityName, score = baseScore + mutBonus }
+				end
+			end
+		end
+	end
+	if rareEggHunter and #matched > 1 then
+		table.sort(matched, function(a, b) return a.score > b.score end)
+	end
+	return matched
+end
+
+local function isPlayerCarryingEgg()
+	local pg = LP:FindFirstChildOfClass("PlayerGui")
+	local dropGui = pg and pg:FindFirstChild("DropHeldEgg")
+	if dropGui and dropGui.Enabled then return true end
+	local char = LP.Character
+	if char then
+		for _, t in ipairs(char:GetChildren()) do
+			if t:IsA("Tool") then
+				if EggToolDisplay and EggToolDisplay.IsEggTool and EggToolDisplay.IsEggTool(t) then return true end
+				if t:GetAttribute("IsEgg") or t:GetAttribute("Uid") or t:GetAttribute("AssetCategory") then return true end
+			end
+		end
+	end
+	return false
+end
+
+local function PlantAllCarriedEggsInPen()
+	local toolsToPlant = {}
+	local function collect(container)
+		if not container then return end
+		for _, t in ipairs(container:GetChildren()) do
+			if t:IsA("Tool") and EggToolDisplay and EggToolDisplay.IsEggTool and EggToolDisplay.IsEggTool(t) then
+				local uid = EggToolDisplay.GetToolUid and EggToolDisplay.GetToolUid(t)
+				if uid then toolsToPlant[#toolsToPlant + 1] = uid end
+			end
+		end
+	end
+	collect(LP.Character)
+	collect(LP:FindFirstChild("Backpack"))
+	local planted = 0
+	for _, eggUid in ipairs(toolsToPlant) do
+		for _ = 1, 3 do
+			local offset = CFrame.new(math.random(-6, 6), 0, math.random(-6, 6))
+			local ok, res = pcall(function()
+				if EggState and EggState.PlantEgg then
+					return EggState.PlantEgg(eggUid, offset)
+				end
+			end)
+			if ok and res then
+				planted = planted + 1
+				break
+			end
+			task.wait(0.08)
+		end
+	end
+	return planted
+end
+
+local function StealSpecificEggRobust(targetItem)
+	local record = targetItem.record or targetItem
+	if not record or not record.Uid or not record.BoundsCFrame then return false end
+	local hrp = findHRP()
+	if not hrp then return false end
+
+	local targetPos = record.BoundsCFrame.Position
+	local speed = math.clamp(tonumber(glideSpeed) or 500, 50, 750)
+	TravelToDestination(targetPos + Vector3.new(0, 1.2, 0), speed)
+	task.wait(0.35)
+
+	local slotKey = nil
+	pcall(function()
+		if AreaEggSlotIdentity and AreaEggSlotIdentity.LooksLikeFirstAreaUid and AreaEggSlotIdentity.LooksLikeFirstAreaUid(record.Uid) then
+			slotKey = AreaEggSlotIdentity.SlotKey(record.AreaId, record.NestId)
+		end
+	end)
+
+	local carryRemote = GetNetRemote("RF/EggWorld/AskFieldEggCarry")
+	if carryRemote then
+		pcall(function() carryRemote:InvokeServer({ Uid = record.Uid, FirstAreaSlotKey = slotKey }) end)
+	end
+	pcall(function()
+		if EggState and EggState.CarryFieldEgg then
+			EggState.CarryFieldEgg(record.Uid, slotKey)
+		end
+	end)
+
+	for _, d in ipairs(Workspace:GetDescendants()) do
+		if d:IsA("ProximityPrompt") and d.Name == "CarryAreaEgg" and d.Enabled then
+			local p = d.Parent
+			if p:IsA("Attachment") then p = p.Parent end
+			if p and p:IsA("BasePart") and (p.Position - hrp.Position).Magnitude < 16 then
+				d.HoldDuration = 0
+				pcall(function() fireproximityprompt(d) end)
+				break
+			end
+		end
+	end
+
+	local t0 = os.clock()
+	local carried = false
+	while os.clock() - t0 < 1.5 and not dead do
+		if isPlayerCarryingEgg() then
+			carried = true
+			break
+		end
+		pcall(function()
+			if EggState and EggState.CarryFieldEgg then
+				EggState.CarryFieldEgg(record.Uid, slotKey)
+			end
+		end)
+		task.wait(0.05)
+	end
+
+	local plot = GetLocalPlotCenter()
+	TravelToDestination(plot + Vector3.new(0, 1.2, 0), speed)
+	if autoPlantEnabled or carried then
+		task.wait(0.2)
+		PlantAllCarriedEggsInPen()
+	end
+	if not carried then
+		ignoredEggs[record.Uid] = os.clock()
+	end
+	return carried or isPlayerCarryingEgg()
+end
+
+local function HatchAllReadyEggs()
+	if not EggState or not EggState.ReadOwnedEggs then return 0 end
+	local ok, snapshot = pcall(EggState.ReadOwnedEggs, LP.UserId)
+	if not ok or not snapshot then return 0 end
+	local count = 0
+	local records = snapshot.Records or snapshot
+	if type(records) == "table" then
+		for uid, eggData in pairs(records) do
+			if type(eggData) == "table" then
+				local ready = false
+				if EggState.IsReadyToHatch then
+					ready = EggState.IsReadyToHatch(eggData)
+				else
+					ready = eggData.Placement ~= nil
+				end
+				if ready then
+					pcall(function()
+						if EggState.BeginHatch then EggState.BeginHatch(uid) end
+						task.wait(0.05)
+						if EggState.FinishHatch then EggState.FinishHatch(uid) end
+						count = count + 1
+					end)
+				end
+			end
+		end
+	end
+	return count
+end
+
+local function StealBestEggOnce()
+	pcall(HatchAllReadyEggs)
+	local eggs = GetMatchingFieldEggs()
+	if #eggs == 0 then return false end
+	return StealSpecificEggRobust(eggs[1])
+end
+
+local function UpgradeHomesteadBase()
+	local re1 = GetNetRemote("RE/Homestead/AskNearbyPurchase")
+	if re1 then pcall(function() re1:FireServer() end) end
+	local re2 = GetNetRemote("RE/Homestead/AskBaseTierRaise")
+	if re2 then pcall(function() re2:FireServer() end) end
+end
+
+local function UpgradeTreadmillTier()
+	local rf = GetNetRemote("RF/Treadmill/AskTierRaise")
+	if rf then pcall(function() rf:InvokeServer() end) end
+end
+
+local function EquipBestPets()
+	local rf = GetNetRemote("RF/Haul/WearBest") or GetNetRemote("RF/PenRoster/ConfirmEquipBestBadge")
+	if rf then pcall(function() rf:InvokeServer() end) end
+end
+
+local function ClaimMonsterChests()
+	pcall(function()
+		local rf1 = GetNetRemote("RF/MonsterParasite/AskChestClaim")
+		if rf1 then rf1:InvokeServer() end
+		local rf2 = GetNetRemote("RF/MonsterParasite/AskChestTake")
+		if rf2 then rf2:InvokeServer() end
+	end)
+end
+
+local function FeedMonsterParasite()
+	local rf = GetNetRemote("RF/MonsterParasite/AskFeed")
+	if rf then pcall(function() rf:InvokeServer() end) end
+end
+
+local function BuyAffordableTrails()
+	local rf = GetNetRemote("RF/Trailwear/AskPurchase")
+	if rf then pcall(function() rf:InvokeServer() end) end
+end
+
+local function SellSelectedPets()
+	local re = GetNetRemote("RE/PetSatchel/SellPet")
+	if not re or not SaveModule then return end
+	local save
+	pcall(function() save = SaveModule.Get and SaveModule.Get() end)
+	local inv = save and save.Inventory
+	if type(inv) ~= "table" then return end
+	local low = { Common = true, Uncommon = true, Rare = true, Epic = true, Legendary = true, Mythic = true }
+	for uid, petData in pairs(inv) do
+		if type(petData) == "table" and not petData.Locked then
+			local rName = petData.Rarity or "Common"
+			local okSell = false
+			if filterHas(selectedStealRarities) then
+				okSell = isRarityAllowed(rName, selectedStealRarities)
+			else
+				okSell = low[rName] == true
+			end
+			if okSell then
+				pcall(function() re:FireServer(uid) end)
+				task.wait(0.08)
+			end
+		end
+	end
+end
+
+local function ClaimAllAvailableRewards()
+	pcall(function()
+		local rf1 = GetNetRemote("RF/AwayEarnings/AskCollect")
+		if rf1 then rf1:InvokeServer() end
+		local rf2 = GetNetRemote("RF/Codex/AskRedeemAll")
+		if rf2 then rf2:InvokeServer() end
+		local rf3 = GetNetRemote("RF/GroupPerk/RedeemPerk")
+		if rf3 then rf3:InvokeServer() end
+	end)
+end
+
+task.spawn(function()
+	while not dead do
+		if autoStealEnabled then
+			pcall(StealBestEggOnce)
+			task.wait(stealDelay)
+		else
+			task.wait(0.3)
+		end
+	end
+end)
+
+task.spawn(function()
+	while not dead do
+		task.wait(hatchCheckDelay)
+		if autoHatchEnabled then pcall(HatchAllReadyEggs) end
+		if autoPlantEnabled then pcall(PlantAllCarriedEggsInPen) end
+		if autoUpgradeBase then pcall(UpgradeHomesteadBase) end
+		if autoUpgradeTreadmill then pcall(UpgradeTreadmillTier) end
+		if autoBuyTrails then pcall(BuyAffordableTrails) end
+		if autoEquipBestPets then pcall(EquipBestPets) end
+		if autoClaimRewards then pcall(ClaimAllAvailableRewards) end
+		if autoSellPets then pcall(SellSelectedPets) end
+		if autoClaimMonsterChests then pcall(ClaimMonsterChests) end
+		if autoFeedMonster then pcall(FeedMonsterParasite) end
+		if avoidTrapsEnabled then pcall(NeutralizeTraps) end
+	end
+end)
+
+task.spawn(function()
+	while not dead do
+		task.wait(batAuraDelay)
+		if batAuraEnabled then
+			local re = GetNetRemote("RE/BatSwing/Trigger")
+			if re then pcall(function() re:FireServer() end) end
+		end
+	end
+end)
+
+task.spawn(function()
+	while not dead do
+		task.wait(0.4)
+		local h = findHum()
+		if h then
+			if walkSpeedEnabled then pcall(function() h.WalkSpeed = walkSpeedVal end) end
+			if jumpEnabled then pcall(function() h.JumpPower = jumpVal end) end
+		end
+	end
+end)
+
+track(UIS.JumpRequest:Connect(function()
+	if not infiniteJump then return end
+	local h = findHum()
+	if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
+end))
+
+track(RunService.Heartbeat:Connect(function()
+	if dead or not antiRagdollEnabled then return end
+	local h = findHum()
+	if h and h:GetState() == Enum.HumanoidStateType.Physics then
+		pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+	end
+end))
+
+pcall(function()
+	track(LP.Idled:Connect(function()
+		if not antiAfk then return end
+		pcall(function()
+			VU:CaptureController()
+			VU:ClickButton2(Vector2.new())
+		end)
+	end))
+end)
+
+local WindUI
+local okW, errW = pcall(function()
+	WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+end)
+if not okW or not WindUI then
+	warn("[DAN HUB SAE] WindUI failed:", errW)
+	return
+end
+
+local Window = WindUI:CreateWindow({
+	Title = "DAN HUB | Steal An Egg",
+	Author = "SGA / SUN GOD NIKA",
+	Folder = "DanHubSAE",
+	Size = UDim2.fromOffset(560, 420),
+	Transparent = true,
+	Theme = "Dark",
+})
+
+local FarmTab = Window:Tab({ Title = "Farm", Icon = "egg" })
+local BaseTab = Window:Tab({ Title = "Base", Icon = "home" })
+local CombatTab = Window:Tab({ Title = "Combat", Icon = "swords" })
+local MoveTab = Window:Tab({ Title = "Move", Icon = "person-standing" })
+local CreditTab = Window:Tab({ Title = "Credits", Icon = "info" })
+
+FarmTab:Section({ Title = "Auto Steal" })
+FarmTab:Toggle({ Title = "Auto Steal Eggs", Value = false, Callback = function(v) autoStealEnabled = v end })
+FarmTab:Toggle({ Title = "Rare Egg Hunter", Value = true, Callback = function(v) rareEggHunter = v end })
+FarmTab:Toggle({ Title = "Auto Place in Pen", Value = false, Callback = function(v) autoPlantEnabled = v end })
+FarmTab:Toggle({ Title = "Auto Hatch Ready Eggs", Value = false, Callback = function(v) autoHatchEnabled = v end })
+FarmTab:Dropdown({
+	Title = "Move Method",
+	Values = { "Tween Glide", "Fly Glide", "Teleport" },
+	Value = "Tween Glide",
+	Callback = function(v) stealMovementMethod = v end,
+})
+FarmTab:Slider({
+	Title = "Glide Speed",
+	Value = { Min = 50, Max = 750, Default = 500 },
+	Callback = function(v) glideSpeed = v end,
+})
+FarmTab:Slider({
+	Title = "Steal Delay",
+	Value = { Min = 0.3, Max = 5, Default = 1 },
+	Callback = function(v) stealDelay = v end,
+})
+FarmTab:Dropdown({
+	Title = "Rarity Filter",
+	Values = RARITY_NAMES,
+	Value = nil,
+	Multi = true,
+	AllowNone = true,
+	Callback = function(v)
+		selectedStealRarities = {}
+		if type(v) == "table" then
+			for _, name in pairs(v) do selectedStealRarities[name] = true end
+		elseif type(v) == "string" then
+			selectedStealRarities[v] = true
+		end
+	end,
+})
+FarmTab:Dropdown({
+	Title = "Area Filter",
+	Values = AREA_NAMES,
+	Value = nil,
+	Multi = true,
+	AllowNone = true,
+	Callback = function(v)
+		selectedStealAreas = {}
+		if type(v) == "table" then
+			for _, name in pairs(v) do selectedStealAreas[name] = true end
+		elseif type(v) == "string" then
+			selectedStealAreas[v] = true
+		end
+	end,
+})
+FarmTab:Button({
+	Title = "Steal Best Once",
+	Callback = function()
+		task.spawn(function()
+			local ok = StealBestEggOnce()
+			WindUI:Notify({ Title = "DAN HUB", Content = ok and "Stole egg" or "No egg found", Duration = 3 })
+		end)
+	end,
+})
+FarmTab:Button({
+	Title = "Hatch All Ready Now",
+	Callback = function()
+		WindUI:Notify({ Title = "DAN HUB", Content = "Hatched " .. tostring(HatchAllReadyEggs()), Duration = 3 })
+	end,
+})
+FarmTab:Button({
+	Title = "Plant Carried Eggs Now",
+	Callback = function()
+		WindUI:Notify({ Title = "DAN HUB", Content = "Planted " .. tostring(PlantAllCarriedEggsInPen()), Duration = 3 })
+	end,
+})
+
+BaseTab:Section({ Title = "Upgrades" })
+BaseTab:Toggle({ Title = "Auto Upgrade Base", Value = false, Callback = function(v) autoUpgradeBase = v end })
+BaseTab:Toggle({ Title = "Auto Upgrade Treadmill", Value = false, Callback = function(v) autoUpgradeTreadmill = v end })
+BaseTab:Toggle({ Title = "Auto Buy Trails", Value = false, Callback = function(v) autoBuyTrails = v end })
+BaseTab:Toggle({ Title = "Auto Equip Best Pets", Value = false, Callback = function(v) autoEquipBestPets = v end })
+BaseTab:Button({ Title = "Upgrade Base Now", Callback = function() UpgradeHomesteadBase() end })
+BaseTab:Button({ Title = "Upgrade Treadmill Now", Callback = function() UpgradeTreadmillTier() end })
+BaseTab:Button({ Title = "Equip Best Pets Now", Callback = function() EquipBestPets() end })
+BaseTab:Section({ Title = "Sell and Rewards" })
+BaseTab:Toggle({ Title = "Auto Sell Low Pets", Value = false, Callback = function(v) autoSellPets = v end })
+BaseTab:Toggle({ Title = "Auto Claim Rewards", Value = false, Callback = function(v) autoClaimRewards = v end })
+BaseTab:Toggle({ Title = "Auto Monster Chests", Value = false, Callback = function(v) autoClaimMonsterChests = v end })
+BaseTab:Toggle({ Title = "Auto Feed Monster", Value = false, Callback = function(v) autoFeedMonster = v end })
+BaseTab:Button({ Title = "Claim Rewards Now", Callback = function() ClaimAllAvailableRewards() end })
+BaseTab:Button({ Title = "Sell Pets Now", Callback = function() SellSelectedPets() end })
+
+CombatTab:Section({ Title = "Bat and Defense" })
+CombatTab:Toggle({ Title = "Bat Slap Aura", Value = false, Callback = function(v) batAuraEnabled = v end })
+CombatTab:Slider({ Title = "Bat Delay", Value = { Min = 0.05, Max = 1, Default = 0.2 }, Callback = function(v) batAuraDelay = v end })
+CombatTab:Toggle({
+	Title = "Anti Trap",
+	Value = true,
+	Callback = function(v)
+		avoidTrapsEnabled = v
+		if v then NeutralizeTraps() end
+	end,
+})
+CombatTab:Toggle({ Title = "Anti Ragdoll", Value = true, Callback = function(v) antiRagdollEnabled = v end })
+CombatTab:Button({
+	Title = "Swing Bat Once",
+	Callback = function()
+		local re = GetNetRemote("RE/BatSwing/Trigger")
+		if re then pcall(function() re:FireServer() end) end
+	end,
+})
+
+MoveTab:Section({ Title = "Movement" })
+MoveTab:Toggle({ Title = "WalkSpeed On", Value = false, Callback = function(v) walkSpeedEnabled = v end })
+MoveTab:Slider({ Title = "WalkSpeed", Value = { Min = 16, Max = 200, Default = 24 }, Callback = function(v) walkSpeedVal = v end })
+MoveTab:Toggle({ Title = "JumpPower On", Value = false, Callback = function(v) jumpEnabled = v end })
+MoveTab:Slider({ Title = "JumpPower", Value = { Min = 50, Max = 300, Default = 60 }, Callback = function(v) jumpVal = v end })
+MoveTab:Toggle({ Title = "Infinite Jump", Value = false, Callback = function(v) infiniteJump = v end })
+MoveTab:Toggle({ Title = "Anti AFK", Value = true, Callback = function(v) antiAfk = v end })
+MoveTab:Section({ Title = "Travel" })
+local selectedArea = "Base / Plot"
+local areaKeys = {}
+for k in pairs(AREA_COORDINATES) do areaKeys[#areaKeys + 1] = k end
+table.sort(areaKeys)
+MoveTab:Dropdown({
+	Title = "Area",
+	Values = areaKeys,
+	Value = "Base / Plot",
+	Callback = function(v) selectedArea = v end,
+})
+MoveTab:Button({
+	Title = "Travel to Area",
+	Callback = function()
+		task.spawn(function()
+			local pos = AREA_COORDINATES[selectedArea]
+			if selectedArea == "Base / Plot" then pos = GetLocalPlotCenter() end
+			if pos then TravelToDestination(pos, glideSpeed) end
+		end)
+	end,
+})
+MoveTab:Button({
+	Title = "TP My Plot",
+	Callback = function()
+		TravelToDestination(GetLocalPlotCenter(), glideSpeed)
+	end,
+})
+
+CreditTab:Section({ Title = "DAN HUB" })
+CreditTab:Paragraph({ Title = "Owner", Desc = "SGA / SUN GOD NIKA" })
+CreditTab:Paragraph({ Title = "UI", Desc = "WindUI by Footagesus" })
+CreditTab:Paragraph({ Title = "Game", Desc = "Steal An Egg" })
+CreditTab:Paragraph({ Title = "Note", Desc = "All farm toggles start OFF. Game may still BAC-kick." })
+
+WindUI:Notify({ Title = "DAN HUB", Content = "Steal An Egg ready | toggles OFF", Duration = 4 })
+print("[DAN HUB SAE] loaded | SGA / SUN GOD NIKA")
