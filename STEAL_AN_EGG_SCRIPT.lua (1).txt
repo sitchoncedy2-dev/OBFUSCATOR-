@@ -1,0 +1,333 @@
+--[[
+	Steal An Egg - safer movement build
+	No bulk remote spam / no instant TP
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local VU = game:GetService("VirtualUser")
+local UIS = game:GetService("UserInputService")
+
+local LP = Players.LocalPlayer
+
+getgenv().sae = getgenv().sae or {}
+local cfg = getgenv().sae
+
+cfg.autoSteal = false
+cfg.autoReturn = true
+cfg.autoPlace = true
+cfg.autoHatch = false
+cfg.autoTreadmill = false
+cfg.stealDelay = 1.2
+cfg.walkSpeed = 28
+cfg.speedOn = false
+cfg.infJump = false
+cfg.noclip = false
+cfg.antiAfk = true
+cfg.eggEsp = false
+cfg.tweenSpeed = 55
+
+local function char()
+	return LP.Character
+end
+
+local function hrp()
+	local c = char()
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function hum()
+	local c = char()
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function softMove(pos)
+	local root = hrp()
+	if not root then return end
+	local goal = pos + Vector3.new(0, 2.5, 0)
+	local dist = (root.Position - goal).Magnitude
+	if dist < 6 then return end
+	local t = math.clamp(dist / math.max(cfg.tweenSpeed, 30), 0.2, 2.5)
+	pcall(function()
+		local tw = TweenService:Create(root, TweenInfo.new(t, Enum.EasingStyle.Linear), {
+			CFrame = CFrame.new(goal)
+		})
+		tw:Play()
+		tw.Completed:Wait()
+	end)
+	pcall(function()
+		root.AssemblyLinearVelocity = Vector3.zero
+	end)
+end
+
+local function firePrompt(prompt)
+	if not prompt then return end
+	pcall(function()
+		if fireproximityprompt then
+			fireproximityprompt(prompt, 1)
+		else
+			prompt:InputHoldBegin()
+			task.wait(math.clamp(prompt.HoldDuration or 0.3, 0.1, 1.2))
+			prompt:InputHoldEnd()
+		end
+	end)
+end
+
+local function isEggLike(name)
+	local n = string.lower(name)
+	return string.find(n, "egg") ~= nil or string.find(n, "nest") ~= nil
+end
+
+local function collectEggs()
+	local list, seen = {}, {}
+	local function add(part, prompt)
+		if not part or seen[part] then return end
+		seen[part] = true
+		list[#list + 1] = {part = part, prompt = prompt}
+	end
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("ProximityPrompt") then
+			local parent = obj.Parent
+			local label = string.lower(tostring(obj.ActionText or "") .. " " .. tostring(obj.ObjectText or "") .. " " .. parent.Name)
+			if string.find(label, "steal") or string.find(label, "egg") or string.find(label, "grab") or string.find(label, "pick") then
+				local part = parent:IsA("BasePart") and parent or parent:FindFirstChildWhichIsA("BasePart", true)
+				if part then add(part, obj) end
+			end
+		elseif obj:IsA("Model") and isEggLike(obj.Name) then
+			local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+			local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+			if part then add(part, prompt) end
+		end
+	end
+	return list
+end
+
+local function nearestEgg(myPos)
+	local best, bestD = nil, 1e9
+	for _, e in ipairs(collectEggs()) do
+		local d = (e.part.Position - myPos).Magnitude
+		if d < bestD and d > 4 then
+			bestD = d
+			best = e
+		end
+	end
+	return best
+end
+
+local function findBasePart()
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		local n = string.lower(obj.Name)
+		if string.find(n, "spawn") or string.find(n, "plot") or string.find(n, "base") or string.find(n, "pen") then
+			if obj:IsA("BasePart") or obj:IsA("Model") then
+				local p = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+				if p then return p end
+			end
+		end
+	end
+	return nil
+end
+
+local function findTreadmill()
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if string.find(string.lower(obj.Name), "treadmill") then
+			if obj:IsA("BasePart") then return obj end
+			local p = obj:FindFirstChildWhichIsA("BasePart", true)
+			if p then return p end
+		end
+	end
+	return nil
+end
+
+local function clickGui(words)
+	local pg = LP:FindFirstChild("PlayerGui")
+	if not pg then return end
+	for _, g in ipairs(pg:GetDescendants()) do
+		if g:IsA("TextButton") or g:IsA("ImageButton") then
+			local t = string.lower(tostring(g.Text or "") .. " " .. g.Name)
+			for _, w in ipairs(words) do
+				if string.find(t, w) then
+					pcall(function()
+						if firesignal then firesignal(g.MouseButton1Click) end
+					end)
+					return
+				end
+			end
+		end
+	end
+end
+
+pcall(function()
+	LP.Idled:Connect(function()
+		if not cfg.antiAfk then return end
+		pcall(function()
+			VU:CaptureController()
+			VU:ClickButton2(Vector2.new())
+		end)
+	end)
+end)
+
+RunService.Stepped:Connect(function()
+	if not cfg.noclip then return end
+	local c = char()
+	if not c then return end
+	for _, p in ipairs(c:GetDescendants()) do
+		if p:IsA("BasePart") then p.CanCollide = false end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		if cfg.speedOn then
+			local h = hum()
+			if h then
+				pcall(function() h.WalkSpeed = math.clamp(cfg.walkSpeed, 16, 40) end)
+			end
+		end
+	end
+end)
+
+UIS.JumpRequest:Connect(function()
+	if not cfg.infJump then return end
+	local h = hum()
+	if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(cfg.stealDelay)
+		if not cfg.autoSteal then
+			task.wait(0.3)
+		else
+			local root = hrp()
+			if root then
+				local egg = nearestEgg(root.Position)
+				if egg then
+					softMove(egg.part.Position)
+					task.wait(0.25)
+					if egg.prompt then firePrompt(egg.prompt) end
+					task.wait(0.4)
+					if cfg.autoReturn then
+						local base = findBasePart()
+						if base then
+							softMove(base.Position)
+							task.wait(0.3)
+							if cfg.autoPlace then
+								clickGui({"place", "put", "drop", "confirm"})
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if cfg.autoTreadmill then
+			local tm = findTreadmill()
+			local root = hrp()
+			if tm and root and (root.Position - tm.Position).Magnitude > 10 then
+				softMove(tm.Position)
+			end
+		end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(2)
+		if cfg.autoHatch then
+			clickGui({"hatch", "open", "claim"})
+		end
+	end
+end)
+
+local espFolder = Instance.new("Folder")
+espFolder.Name = "SAE_ESP"
+pcall(function() espFolder.Parent = game:GetService("CoreGui") end)
+
+local function clearEsp()
+	espFolder:ClearAllChildren()
+end
+
+task.spawn(function()
+	while true do
+		task.wait(1.5)
+		clearEsp()
+		if cfg.eggEsp then
+			for _, e in ipairs(collectEggs()) do
+				local bb = Instance.new("BillboardGui")
+				bb.Size = UDim2.new(0, 90, 0, 28)
+				bb.AlwaysOnTop = true
+				bb.Adornee = e.part
+				bb.Parent = espFolder
+				local tl = Instance.new("TextLabel")
+				tl.Size = UDim2.new(1, 0, 1, 0)
+				tl.BackgroundTransparency = 1
+				tl.TextColor3 = Color3.fromRGB(255, 220, 80)
+				tl.TextStrokeTransparency = 0.5
+				tl.Font = Enum.Font.GothamBold
+				tl.TextSize = 12
+				tl.Text = "egg"
+				tl.Parent = bb
+			end
+		end
+	end
+end)
+
+local okLib, Rayfield = pcall(function()
+	return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+end)
+
+if not okLib or not Rayfield then
+	print("[sae] ui failed - use getgenv().sae")
+	return
+end
+
+local Window = Rayfield:CreateWindow({
+	Name = "Steal An Egg",
+	LoadingTitle = "SAE",
+	LoadingSubtitle = "slow mode",
+	ConfigurationSaving = {Enabled = false},
+	KeySystem = false,
+	DisableRayfieldPrompts = true,
+})
+
+local Farm = Window:CreateTab("Farm", 4483362458)
+local Move = Window:CreateTab("Move", 4483362458)
+local Visual = Window:CreateTab("Visual", 4483362458)
+local Misc = Window:CreateTab("Misc", 4483362458)
+
+Farm:CreateToggle({Name = "Auto Steal (slow)", CurrentValue = false, Callback = function(v) cfg.autoSteal = v end})
+Farm:CreateToggle({Name = "Auto Return Base", CurrentValue = true, Callback = function(v) cfg.autoReturn = v end})
+Farm:CreateToggle({Name = "Auto Place", CurrentValue = true, Callback = function(v) cfg.autoPlace = v end})
+Farm:CreateToggle({Name = "Auto Hatch", CurrentValue = false, Callback = function(v) cfg.autoHatch = v end})
+Farm:CreateToggle({Name = "Auto Treadmill", CurrentValue = false, Callback = function(v) cfg.autoTreadmill = v end})
+Farm:CreateSlider({Name = "Steal Delay", Range = {0.6, 3}, Increment = 0.1, CurrentValue = 1.2, Callback = function(v) cfg.stealDelay = v end})
+
+Move:CreateToggle({Name = "WalkSpeed On (max 40)", CurrentValue = false, Callback = function(v) cfg.speedOn = v end})
+Move:CreateSlider({Name = "WalkSpeed", Range = {16, 40}, Increment = 1, CurrentValue = 28, Callback = function(v) cfg.walkSpeed = v end})
+Move:CreateToggle({Name = "Infinite Jump", CurrentValue = false, Callback = function(v) cfg.infJump = v end})
+Move:CreateToggle({Name = "Noclip", CurrentValue = false, Callback = function(v) cfg.noclip = v end})
+Move:CreateButton({Name = "Go Base (tween)", Callback = function()
+	local b = findBasePart()
+	if b then softMove(b.Position) end
+end})
+Move:CreateButton({Name = "Go Treadmill (tween)", Callback = function()
+	local t = findTreadmill()
+	if t then softMove(t.Position) end
+end})
+
+Visual:CreateToggle({Name = "Egg ESP", CurrentValue = false, Callback = function(v)
+	cfg.eggEsp = v
+	if not v then clearEsp() end
+end})
+
+Misc:CreateToggle({Name = "Anti AFK", CurrentValue = true, Callback = function(v) cfg.antiAfk = v end})
+
+Rayfield:Notify({Title = "SAE", Content = "slow mode - kick still possible", Duration = 4})
+print("[sae] ready")
